@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  chattui-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chattui-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - chattui-data:/app/data
+    environment:
+      - PORT=8443
+      - DB_PATH=/app/data/chattui.db
+    command: ["-port", "8443", "-db", "/app/data/chattui.db", "-retention-check", "15", "-expiry-check", "1"]
+
+volumes:
+  chattui-data:
+    driver: local

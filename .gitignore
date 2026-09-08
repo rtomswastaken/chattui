@@ -1,0 +1,16 @@
+# Binaries
+chattui-server
+chattui-client
+*.exe
+*.test
+
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
+# IDE & OS files
+.DS_Store
+.vscode/
+.idea/
+*.swp

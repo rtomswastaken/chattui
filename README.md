@@ -1,185 +1,115 @@
-# chatTUI 💬
+# chatTUI
 
-> A modern, lightweight, Discord/Slack-inspired terminal chat platform built from scratch in Go with Charm's Bubble Tea, Lip Gloss, SQLite persistence, and private networking over Tailscale.
+chatTUI is a terminal-based chat client and server written in Go. It provides real-time messaging across public channels, password-protected rooms, and direct messages using a Bubble Tea interface and a custom TCP wire protocol.
 
-```
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ chatTUI                                                       ● Connected     │
-├──────────────────────┬────────────────────────────────────────────────────────┤
-│ CHATS                │ # global                                               │
-│                      │ ────────────────────────────────────────────────────── │
-│ ● **global**         │ 10:32  alex                                            │
-│ ● **dev**            │        hey everyone! welcome to chatTUI                │
-│   # announcements    │                                                        │
-│                      │ 10:33  rtoms                                           │
-│ DIRECT MESSAGES      │        what's up @alex? checking out the new rooms     │
-│   @alex              │                                                        │
-│   @maya              │ 10:34  ● maya joined #global                           │
-│                      │                                                        │
-│ ROOMS                │                                                        │
-│   # coding           │                                                        │
-│   # projects         │                                                        │
-├──────────────────────┴────────────────────────────────────────────────────────┤
-│ > Type a message or /help...                                                  │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ Ctrl+K Search   Ctrl+N DM   Ctrl+R Room   Ctrl+P Profile   Ctrl+H Help   Ctrl+Q │
-└───────────────────────────────────────────────────────────────────────────────┘
-```
+## Overview
 
----
+chatTUI consists of two primary binaries: a dedicated server (`chattui-server`) and a terminal client (`chattui-client`). The server manages user authentication, SQLite session persistence, room administration, presence monitoring, and automatic message pruning. The client is built with Charm's Bubble Tea and Lip Gloss libraries, rendering a multi-pane terminal interface with auto-scrolling message viewports, modal dialogs, and real-time event updates.
 
-## Table of Contents
-
-- [Features](#features)
-- [Architecture](#architecture)
-- [Data Model & Persistence](#data-model--persistence)
-- [Quickstart Guide](#quickstart-guide)
-  - [Prerequisites](#prerequisites)
-  - [Building from Source](#building-from-source)
-  - [Starting the Server](#starting-the-server)
-  - [Launching the Client](#launching-the-client)
-- [Deploying with Tailscale on Ubuntu](#deploying-with-tailscale-on-ubuntu)
-- [Docker Deployment](#docker-deployment)
-- [Keyboard Shortcuts & Commands](#keyboard-shortcuts--commands)
-- [Room Permissions Matrix](#room-permissions-matrix)
-- [Development & Automated Testing](#development--automated-testing)
-- [License](#license)
-
----
+Communication between the client and server takes place over raw TCP using length-prefixed JSON frames, allowing the service to run over local networks or private overlay networks such as Tailscale.
 
 ## Features
 
-- 🖥️ **Full Multi-Pane TUI**: Built with Charm's [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss). Responsive to terminal window resizing.
-- 🔐 **Secure Authentication**: Interactive INK-style registration flow on first launch. Passwords securely hashed with `bcrypt`. Session management with instant reconnect.
-- ⚡ **Length-Prefixed Wire Protocol**: Robust framing over raw TCP, avoiding newline truncation and ensuring low-latency frame delivery over private networks.
-- 🌐 **Global Chat & Public/Private Rooms**: Built-in `# global` channel, discoverable public rooms, and invite/password-protected private rooms.
-- 🔒 **Password-Protected Rooms**: Rooms can be password protected with hashed secrets and interactive password prompts.
-- ⏱️ **Temporary Ephemeral Rooms**: Channels can have an expiration lifetime (e.g. 6 hours). Automatic cleanup worker archives/deletes rooms and notifies members.
-- 🛡️ **Authoritative Room Administration**: 4-tier server-enforced role hierarchy (`Owner` > `Admin` > `Moderator` > `Member`) with kick, ban, mute, role management, and ownership transfer confirmation dialogs.
-- ✉️ **Direct Messaging (1-on-1)**: Private direct message channels with online status indicators and unread tracking.
-- 🔔 **Mentions & Real-Time Notifications**: Detects `@username` mentions, highlights them visually, and delivers instant toast notifications.
-- 🔴 **Visual Unread Indicators**: Distinct bold channel names with bright green `●` unread badges that automatically clear when opened.
-- 📜 **Smooth Auto-Scroll & Scrollback**: Viewport locks to the latest message automatically when at bottom, pauses scrolling when navigating upward, and resumes at bottom.
-- 🟢 **Presence Engine**: Live presence transitions (`● Online`, `◐ Idle`, `○ Away`, `○ Offline`) with automatic idle detection after inactivity.
-- 🎨 **User Colors & Custom Profiles**: Choose custom display colors and personal status messages.
-- 🧹 **24-Hour Message Retention**: Background cleanup ticker automatically purges messages older than 24 hours. Pure Go SQLite driver (`modernc.org/sqlite`) guarantees zero CGO dependency headaches.
+- Terminal user interface built with Bubble Tea, Bubbles, and Lip Gloss with dynamic window resizing support.
+- Channel organization supporting default global chat, public rooms, password-protected private rooms, and ephemeral rooms that expire automatically.
+- Direct messaging with unread message counters and live presence indicators.
+- User mentions (`@username`) with in-app highlight formatting and toast notifications.
+- Four-tier room role hierarchy (Owner, Admin, Moderator, Member) supporting kicks, bans, mutes, and room ownership transfer.
+- User presence tracking (Online, Idle, Offline) with automatic idle detection after 5 minutes of client inactivity.
+- Automated background workers for 24-hour message retention cleanup and temporary room expiration.
+- Zero-CGO SQLite persistence operating in WAL mode using the pure Go `modernc.org/sqlite` driver.
+- Custom wire protocol enforcing a 1 MB maximum frame size over raw TCP connections.
 
----
+## Tech Stack
 
-## Architecture
+- Language: Go
+- TUI Framework: Charm Bubble Tea, Bubbles, Lip Gloss
+- Database: SQLite (via `modernc.org/sqlite` in WAL mode)
+- Authentication: `golang.org/x/crypto/bcrypt`
+- Transport: TCP with 4-byte big-endian length-prefixed JSON payloads
 
-```
-                          ┌────────────────────────┐
-                          │    SQLite Database     │
-                          │  (modernc.org/sqlite)  │
-                          │   WAL Mode / Indexes   │
-                          └──────────▲─────────────┘
-                                     │
-                          ┌──────────┴─────────────┐
-                          │     chatTUI Server     │
-                          │                        │
-                          │  • Auth & Sessions     │
-                          │  • Room & Perm Engine  │
-                          │  • Message Dispatcher  │
-                          │  • Presence Tracker    │
-                          │  • 24h Prune Worker    │
-                          │  • Expiry Worker       │
-                          └──────────▲─────────────┘
-                                     │
-                      Tailscale / TCP (Length-Prefixed JSON)
-                                     │
-               ┌─────────────────────┴─────────────────────┐
-               │                                           │
-    ┌──────────┴──────────┐                     ┌──────────┴──────────┐
-    │    chatTUI Client   │                     │    chatTUI Client   │
-    │   (Bubble Tea TUI)  │                     │   (Bubble Tea TUI)  │
-    │                     │                     │                     │
-    │ • INK-Style Auth    │                     │ • INK-Style Auth    │
-    │ • Multi-Pane View   │                     │ • Multi-Pane View   │
-    │ • Viewport Scroller │                     │ • Viewport Scroller │
-    │ • Modal Overlays    │                     │ • Modal Overlays    │
-    │ • Auto-Reconnect    │                     │ • Auto-Reconnect    │
-    └─────────────────────┘                     └─────────────────────┘
-```
+## Requirements
 
-The client communicates exclusively with the server via the custom TCP protocol. The server is strictly authoritative for permissions, messages, authentication, presence, and read states.
+- Go 1.24 or later (for compiling from source)
+- Linux, macOS, or compatible Unix-like terminal environment
+- Docker and Docker Compose (optional, for containerized server deployments)
 
----
+## Installation
 
-## Data Model & Persistence
-
-chatTUI uses SQLite in WAL mode with relational tables and indexes:
-
-- `users`: `id`, `username` (UNIQUE), `display_name`, `password_hash`, `user_color`, `custom_status`, `presence_state`, `last_seen_at`, `created_at`
-- `sessions`: `token` (PK), `user_id` (FK), `created_at`, `expires_at`
-- `rooms`: `id`, `name` (UNIQUE), `description`, `is_private`, `password_hash`, `owner_id` (FK), `is_temporary`, `expires_at`, `created_at`
-- `room_members`: `room_id` (FK), `user_id` (FK), `role` (`owner`/`admin`/`moderator`/`member`), `joined_at`
-- `room_bans`: `room_id`, `user_id`, `banned_by`, `reason`, `created_at`
-- `room_mutes`: `room_id`, `user_id`, `muted_by`, `expires_at`, `created_at`
-- `messages`: `id`, `sender_id`, `target_type` (`room`/`dm`), `room_id`, `recipient_id`, `content`, `created_at`, `is_system`
-- `read_states`: `user_id`, `target_type`, `target_id`, `last_read_message_id`, `updated_at`
-- `notifications`: `id`, `user_id`, `type`, `title`, `body`, `is_read`, `created_at`
-
-Indexes exist on `username`, message `created_at`, room messages, DMs, member lists, and unread states.
-
----
-
-## Quickstart Guide
-
-### Prerequisites
-
-- [Go 1.22+](https://golang.org/dl/)
-
-### Building from Source
+Clone the repository and compile the binaries:
 
 ```bash
 git clone https://github.com/rtoms/chattui.git
 cd chattui
 
-# Build both server and client binaries
+# Build server and client binaries
 go build -o chattui-server ./cmd/server
 go build -o chattui-client ./cmd/client
 ```
 
-### Starting the Server
+## Usage
+
+### Running the Server
+
+Start the server using default settings (listens on `0.0.0.0:8443` and writes to `chattui.db` in the current directory):
 
 ```bash
-# Run server on default port 8443 with database chattui.db
 ./chattui-server
-
-# Or customize flags:
-./chattui-server -port 8443 -db /path/to/chattui.db -retention-check 15 -expiry-check 1
 ```
 
-### Launching the Client
+Server command-line flags:
 
-Open a terminal window:
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-port` | int | `8443` | TCP port to listen on |
+| `-db` | string | `chattui.db` | File path for the SQLite database |
+| `-retention-check` | int | `15` | Interval in minutes to purge messages older than 24 hours |
+| `-expiry-check` | int | `1` | Interval in minutes to delete expired temporary rooms |
+
+Example with custom configuration:
+
+```bash
+./chattui-server -port 9000 -db /var/lib/chattui/data.db -retention-check 30 -expiry-check 5
+```
+
+### Running the Client
+
+Launch the client by providing the server address:
+
 ```bash
 ./chattui-client -server 127.0.0.1:8443
 ```
 
-On first launch:
-1. Fill in **Username**, **Display Name**, **Password**, and select your **User Color**.
-2. Press **Enter** to create your account.
-3. You will immediately be connected to `# global` and see:
-   `● <username> just joined chatTUI`
+Client command-line flags:
 
----
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-server` | string | `127.0.0.1:8443` | Server address in `host:port` format |
 
-## Deploying with Tailscale on Ubuntu
+### First Launch and Account Creation
 
-chatTUI is designed to operate seamlessly across private networks such as Tailscale.
+When launching the client for the first time:
 
-### 1. Install Tailscale on the Server
+1. Select between Registration and Login modes.
+2. In registration mode, enter a username (3 to 20 alphanumeric characters, underscores, or hyphens), display name, password, and optional user color and status message.
+3. Upon registration, the server stores hashed credentials, establishes an authenticated session, and connects the client to `# global`.
+
+## Deployment
+
+### Tailscale Deployment on Linux
+
+To host the server privately on a Tailscale network:
+
+1. Install Tailscale and connect the server host to your tailnet:
+
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 tailscale ip -4
-# Example output: 100.101.102.103
 ```
 
-### 2. Run chatTUI Server as a Systemd Service
-Create `/etc/systemd/system/chattui.service`:
+2. Create a systemd service file at `/etc/systemd/system/chattui.service`:
+
 ```ini
 [Unit]
 Description=chatTUI Server
@@ -197,117 +127,123 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Enable and start the service:
+3. Enable and start the service:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now chattui
 ```
 
-### 3. Connect from Any Tailscale Machine
-On your laptop or workstation (connected to the same Tailnet):
+4. Connect from another machine on the same tailnet:
+
 ```bash
-chattui-client -server 100.101.102.103:8443
+./chattui-client -server <tailscale-ip>:8443
 ```
 
----
+### Docker Deployment
 
-## Docker Deployment
-
-Use Docker Compose for an isolated container deployment:
+Run the server container with Docker Compose:
 
 ```bash
 docker compose up -d --build
 ```
 
-Logs can be viewed with:
+View server logs:
+
 ```bash
 docker compose logs -f chattui-server
 ```
 
----
+The container exposes port `8443` and persists database storage in the `chattui-data` volume mapped to `/app/data`.
 
-## Keyboard Shortcuts & Commands
+## Keyboard Shortcuts and Commands
 
 ### Keyboard Shortcuts
 
-| Shortcut | Action |
-| :--- | :--- |
-| `Ctrl + K` | Open Command / Search Palette |
-| `Ctrl + N` | Start Direct Message (DM) |
-| `Ctrl + R` | Open Room Browser / Create Room |
-| `Ctrl + P` | View & Edit Profile |
-| `Ctrl + H` | Display Help Modal |
-| `Ctrl + Q` | Clean Disconnect & Quit |
-| `Alt + ↑ / ↓` | Navigate between Sidebar Channels |
-| `Page Up / Down` | Scroll message viewport up/down |
-| `Home` / `End` | Jump to top / Jump to newest message |
-| `Esc` | Close any active modal or dialog |
-| `Tab` | Switch focus / toggle forms |
+| Shortcut | Context | Action |
+| --- | --- | --- |
+| `Ctrl + K` | Chat view | Open command palette |
+| `Ctrl + N` | Chat view | Open direct message user selector |
+| `Ctrl + R` | Chat view | Open room browser |
+| `Ctrl + P` | Chat view | Open profile settings modal |
+| `Ctrl + H` | Chat view | Open help modal |
+| `Ctrl + Q` | Global | Disconnect session and exit |
+| `Alt + Up` / `Ctrl + Up` | Chat view | Select previous channel in sidebar |
+| `Alt + Down` / `Ctrl + Down` | Chat view | Select next channel in sidebar |
+| `Page Up` | Chat view | Scroll chat viewport up (pauses auto-scroll) |
+| `Page Down` | Chat view | Scroll chat viewport down |
+| `Home` | Chat view | Scroll to top of message history |
+| `End` | Chat view | Scroll to latest message (resumes auto-scroll) |
+| `Esc` | Modals / Chat view | Close modal, or toggle focus between input and sidebar |
+| `Tab` | Chat view | Toggle focus between input and sidebar (when input is empty) |
+| `Up` / `k` | Sidebar focused | Move channel selection up |
+| `Down` / `j` | Sidebar focused | Move channel selection down |
+| `Enter` | Sidebar focused | Activate selected channel and return focus to input |
 
 ### Slash Commands
 
-| Command | Description |
-| :--- | :--- |
-| `/help` | Show list of all available commands |
-| `/who` | List all users and active presence |
-| `/msg <user> <message>` | Send a direct message |
-| `/room list` | Open public room browser |
-| `/room create <name>` | Create a new room |
-| `/room join <name> [password]` | Join an existing room |
-| `/room leave` | Leave the current room |
-| `/color <Cyan\|Blue\|...>` | Update your user display color |
-| `/status <status text>` | Set your personal custom status |
-| `/profile` | Open profile screen |
-| `/kick <user>` | *(Moderator+)* Kick a user from current room |
-| `/ban <user> [reason]` | *(Admin+)* Ban a user from current room |
-| `/mute <user> [minutes]` | *(Moderator+)* Mute a user for *N* minutes |
-| `/transfer <user>` | *(Owner)* Transfer room ownership to member |
-| `/quit` | Cleanly disconnect and exit |
+Enter slash commands directly into the chat input field:
 
----
+| Command | Arguments | Description |
+| --- | --- | --- |
+| `/help` | None | Open the help modal |
+| `/who` | None | List users and their active presence status |
+| `/msg` | `<user> <message>` | Send a direct message to a user |
+| `/room list` | None | Open the public room browser |
+| `/room create` | `<name>` | Create a new room (opens creation modal if name is omitted) |
+| `/room join` | `<name> [password]` | Join an existing room with optional password |
+| `/room leave` | None | Leave the active room (global chat cannot be left) |
+| `/color` | `<color>` | Update display color (Cyan, Blue, Green, Yellow, Magenta, Red, White) |
+| `/status` | `<status text>` | Update profile custom status string |
+| `/profile` | None | Open profile editor modal |
+| `/kick` | `<user>` | Kick a user from the current room (Moderator or higher) |
+| `/ban` | `<user> [reason]` | Ban a user from the current room (Admin or higher) |
+| `/mute` | `<user> [minutes]` | Mute a user for specified minutes (Moderator or higher, default 15) |
+| `/transfer` | `<user>` | Open confirmation dialog to transfer room ownership (Owner only) |
+| `/quit` | None | Disconnect and quit the application |
 
 ## Room Permissions Matrix
 
-Server-side permission enforcement follows a strict 4-level hierarchy:
+Server-side permission enforcement applies the following access levels:
 
-| Permission | Owner | Admin | Moderator | Member |
-| :--- | :---: | :---: | :---: | :---: |
-| Send / Read Messages | ✅ | ✅ | ✅ | ✅ |
-| Leave Room | Transfer First | ✅ | ✅ | ✅ |
-| Kick Lower Roles | ✅ | ✅ | ✅ | ❌ |
-| Mute Lower Roles | ✅ | ✅ | ✅ | ❌ |
-| Ban Lower Roles | ✅ | ✅ | ❌ | ❌ |
-| Manage Moderators | ✅ | ✅ | ❌ | ❌ |
-| Manage Admins | ✅ | ❌ | ❌ | ❌ |
-| Transfer Ownership | ✅ | ❌ | ❌ | ❌ |
-| Delete Room | ✅ | ❌ | ❌ | ❌ |
+| Action | Owner | Admin | Moderator | Member |
+| --- | --- | --- | --- | --- |
+| Read and Send Messages | Yes | Yes | Yes | Yes |
+| Leave Room | Transfer First | Yes | Yes | Yes |
+| Kick Lower Roles | Yes | Yes | Yes | No |
+| Mute Lower Roles | Yes | Yes | Yes | No |
+| Ban Lower Roles | Yes | Yes | No | No |
+| Transfer Ownership | Yes | No | No | No |
 
----
+Moderation actions cannot be performed on oneself or on users holding an equal or higher role.
 
-## Development & Automated Testing
+## Wire Protocol
 
-### Run All Unit & Integration Tests
+The client and server communicate over TCP using binary length-prefixed frames:
+
+1. Frame Header: 4-byte unsigned big-endian integer indicating payload length.
+2. Frame Body: JSON-encoded payload representing a `WireMessage` structure.
+3. Size Limit: Maximum frame size is 1 MB; frames exceeding this size are rejected.
+
+The server remains authoritative for authentication verification, message routing, permission enforcement, and room lifecycle events.
+
+## Development and Testing
+
+Run unit and integration test suites with Go's race detector:
 
 ```bash
-# Run all tests with Go's race condition detector
 go test -v -race ./internal/...
 ```
 
 Test coverage includes:
-- Account creation & duplicate username rejection
-- Password hashing and login verification
-- Room creation, password protection, and public/private visibility
-- Role permissions hierarchy (Owner > Admin > Mod > Member)
-- Moderation restrictions (kick, ban, mute)
-- Room ownership transfer
-- Temporary room expiration worker
-- 24-hour message retention cleanup query
-- `@username` mention parsing & notification dispatch
-- Presence tracking, idle detection, and live events
-- End-to-end multi-client TCP networking
-
----
+- Authentication, credential hashing, and session validation
+- Database initialization, user queries, and migration integrity
+- Room lifecycle, permission checks, password validation, and ephemeral room expiration
+- 24-hour message retention purging
+- Mention extraction and notification dispatch
+- Presence updates and idle state tracking
+- Multi-client TCP networking
 
 ## License
 
-MIT License. Built with ❤️ in Go for terminal enthusiasts.
+This project is licensed under the MIT License.
